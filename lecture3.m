@@ -184,13 +184,13 @@ end
 % z^2 = z - 0.5
 %
 % Characteristic equation:
-% z^2 + z + 0.5 = 0
+% z^2 - z + 0.5 = 0
 
 % Find the roots of the characteristic equation
-z_2c = roots([1 1 0.5]);
+z_2c = roots([1 -1 0.5]);
 
 % Find the magnitude of the roots
-mag_2c = abs(z_2b);
+mag_2c = abs(z_2c);
 
 % Check if all roots are inside the unit circle
 if all(mag_2c < 1)
@@ -205,18 +205,87 @@ end
 
 %% E2 find A1 and A2
 
-% do it later 
+%% E2 find A1 and A2
+
+%% E2a
+
+% General solution:
+% u_k = A1*z1^k + A2*z2^k
+%
+% Initial conditions:
+% u_0 = 0
+% u_1 = 1
+
+z1 = z_2a(1);
+z2 = z_2a(2);
+
+% From the initial conditions:
+% A1 + A2 = 0
+% A1*z1 + A2*z2 = 1
+
+A = [1 1;
+     z1 z2];
+
+b = [0;
+     1];
+
+A_2a = A\b;
+
+A1_2a = A_2a(1)
+A2_2a = A_2a(2)
+
+
+%% E2b
+
+z1 = z_2b(1);
+z2 = z_2b(2);
+
+A = [1 1;
+     z1 z2];
+
+b = [0;
+     1];
+
+A_2b = A\b;
+
+A1_2b = A_2b(1)
+A2_2b = A_2b(2)
+
+
+%% E2c
+
+z1 = z_2c(1);
+z2 = z_2c(2);
+
+A = [1 1;
+     z1 z2];
+
+b = [0;
+     1];
+
+A_2c = A\b;
+
+A1_2c = A_2c(1)
+A2_2c = A_2c(2)
+
+%% Exercise E3
 
 %% E3a
-% Find the roots of the characteristic equation
-z_3a = roots([1 1.1 -0.01 0.04]);
+
+% Characteristic equation:
+% z^3 - 1.1*z^2 + 0.01*z + 0.405 = 0
+
+% Find the roots
+z_3a = roots([1 -1.1 0.01 0.405]);
 
 % Find the magnitude of the roots
 mag_3a = abs(z_3a);
-mag_3a 
 
 % Check how many roots are outside the unit circle
 outside_3a = sum(mag_3a > 1);
+
+z_3a
+mag_3a
 
 if outside_3a == 0
     disp('E3a has no roots outside the unit circle')
@@ -226,16 +295,23 @@ else
     fprintf('E3a has %d roots outside the unit circle\n', outside_3a)
 end
 
+
 %% E3b
-% Find the roots of the characteristic equation
-z_3b = roots([1 3.6 -4 -1.6]);
+
+% Characteristic equation:
+% z^3 - 3.6*z^2 + 4*z - 1.6 = 0
+
+% Find the roots
+z_3b = roots([1 -3.6 4 -1.6]);
 
 % Find the magnitude of the roots
 mag_3b = abs(z_3b);
-mag_3b 
 
 % Check how many roots are outside the unit circle
 outside_3b = sum(mag_3b > 1);
+
+z_3b
+mag_3b
 
 if outside_3b == 0
     disp('E3b has no roots outside the unit circle')
