@@ -459,6 +459,9 @@ title('PI Controller Step Response')
 xlim([0 0.5])
 ylim([0 120])
 
+fprintf('Kp                  = %.5f\n', Kp);
+fprintf('tau_i               = %.5f s\n', tau_i);
+
 %% Step response performance
 
 t = out.so.Time;
@@ -471,10 +474,10 @@ omega_response = omega(idx);
 
 info = stepinfo(omega_response, t_response, 100);
 
-fprintf('Rise time     = %.4f s\n', info.RiseTime);
-fprintf('Settling time = %.4f s\n', info.SettlingTime);
-fprintf('Overshoot     = %.2f %%\n', info.Overshoot);
-fprintf('Peak velocity = %.2f rad/s\n', info.Peak);
+%fprintf('Rise time     = %.4f s\n', info.RiseTime);
+%fprintf('Settling time = %.4f s\n', info.SettlingTime);
+%fprintf('Overshoot     = %.2f %%\n', info.Overshoot);
+%fprintf('Peak velocity = %.2f rad/s\n', info.Peak);
 
 %% The final PI controller parameters are:
 % Kp = 0.09606
