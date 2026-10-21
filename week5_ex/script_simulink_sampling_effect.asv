@@ -1,0 +1,45 @@
+clear
+format compact
+
+%Robot
+gear = 9.6;
+wrad = 0.0315;
+
+%Model
+R = 6.8;
+L = 0.01;
+Kb = 0.009;
+Kt = 0.009;
+D = 3.2e-7;
+J = 5.1e-7;
+J_new = 5.4836e-6;
+
+%Controller
+Kp_P = 0.1046;
+tau_i = 0.1187;
+
+
+out = sim('Motor_model_with_controller_sampling');
+
+f = figure('Color', 'w');
+plot(out.so1.Time, out.so1.Data(:,4), 'LineWidth', 1.5)
+grid on
+xlabel('Time (s)'); ylabel('Velocity (rad/s)')
+set(gca, 'Color','w', 'XColor','k', 'YColor','k')
+exportgraphics(f, 'step_response.png', 'Resolution', 300, 'BackgroundColor', 'white');
+
+out = sim('Motor_model_with_controller_sampling');
+ref = 100;
+t = out.so1.Time;
+y = out.so1.Data(:, 4);
+
+k = t >= 0.1;
+S = stepinfo(y(k), t(k) - 0.1, ref);
+e_ss = ref - y(end);
+
+fprintf('Rise time = %.1f ms\n', S.RiseTime*1000)
+fprintf('Overshoot = %.2f %%\n', S.Overshoot)
+fprintf('Settling time = %.1f ms\n', S.SettlingTime*1000)
+fprintf('Steady-state error = %.2f rad/s\n', e_ss)
+
+poles_no_delay

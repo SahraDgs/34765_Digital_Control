@@ -40,8 +40,8 @@ void printLog();
 
 /**
  * Global variables */
-// Sample time can not go lower than 300us
-const uint32_t sampleTimeUs = 500; // desired sample time in us !!!! put in 3 hundred ms
+// Sample time can not go lower than 300us 0.3ms
+const uint32_t sampleTimeUs = 1000; // desired sample time in us !!!! put in 3 hundred ms
 // const float ts = sampleTimeUs * 1e-6; // sample time in seconds
 // Robot configuration
 const float gear = 9.6;
@@ -52,6 +52,7 @@ float distA = 0; // trip distance
 float pose[4];
 float poseVel[2];
 bool velSaturated = false;
+float Kp = 0.15;
 
 // ////////////////////////////////////////
 // define a structure for log elements
@@ -113,7 +114,13 @@ void printLog()
 
   // CODE ADDED BY ME
   Serial.println("% 11-13 Gyro values");
-  Serial.println("% 14  current(A)");
+  Serial.println("% 14-15  current (left, right) (A)");
+  Serial.println("% 16  Pose velocity: velocity (m/s)");
+  Serial.println("% 17  Pose velocity: turnrate (rad/s)");
+  Serial.println("% 18  Pose: distance(m)");
+  Serial.println("% 19  Pose: heading (rad)");
+  Serial.println("% 20  Pose: x (m)");
+  Serial.println("% 21  Pose: y (m)");
 
   for (int i = 0; i < logsCnt; i++)
   {
@@ -145,7 +152,22 @@ void printLog()
     Serial.print(d->gyro[2], 2);
     Serial.print(" ");
     Serial.print(d->motorCurrent[0], 2);
+    Serial.print(" ");
+    Serial.print(d->motorCurrent[1], 2);
+    Serial.print(" ");
+    Serial.print(d->poseVel[0], 2);
+    Serial.print(" ");
+    Serial.print(d->poseVel[1], 2);
+    Serial.print(" ");
+    Serial.print(d->pose[0], 2);
+    Serial.print(" ");
+    Serial.print(d->pose[1], 2);
+    Serial.print(" ");
+    Serial.print(d->pose[2], 2);
+    Serial.print(" ");
+    Serial.print(d->pose[3], 2);
     Serial.println(" ");
+
     d++;
   }
   Serial.print("% sent ");
@@ -162,6 +184,12 @@ float time_sec = 0;
 
 // Timer that controls sample time (interrupt based)
 IntervalTimer sampleTimer;
+
+float integrator(float current_in, float prev_integral)
+{
+  float integral = prev_integral + current_in * sampleTimeUs * 1e-6f;
+  return integral;
+}
 
 void timerInterrupt()
 {
@@ -185,13 +213,19 @@ void start()
   logsCnt = 0;
   // change motor PWM frequency for sampling time test
   // should not be above 100000 (100kHz), default is 80kHz.
-  motor.setPWMfrq(80000);
+  motor.setPWMfrq(80000); // before 80000
   time_sec = 0;
   encoder.encoder[0] = 0; // left motor encoder
   encoder.encoder[1] = 0; // right motor encoder
   // Update of display takes too long for fast sampling
   // so, disable during sequence.
   display.useDisplay = false;
+
+  // added lec6
+  for (int i = 0; i < 4; i++)
+    pose[i] = 0.0f;
+  poseVel[0] = 0.0f;
+  poseVel[1] = 0.0f;
 }
 
 void stop(float after)
@@ -216,6 +250,51 @@ void finished()
   printLog();
 }
 
+void sequence_1m()
+{
+  bool button;
+  //
+  // this is a state machine
+  // state 0: wait for start button press
+  // other states are part of a sequence
+  switch (state)
+  {       // run mission, initial value
+  case 0: // State 0 is just inactive, waiting for the start signal.
+    button = digitalReadFast(PIN_START_BUTTON);
+    if (button or robot.missionStart)
+    { // starting by a short time to get zero velocity data to the log
+      // reset for new run
+      start();
+      // Prepare next state
+      desiredValue = 0; // reference value to the controller
+      // to get start the log with no velocity
+      endTime = time_sec + 0.020; // new state to end after 20ms
+      state = 10;
+    }
+    break;
+  case 10: // Waiting for first step (zero velocity to log) to finish.
+    if (time_sec > endTime)
+    {                           // change to next values - drive
+      desiredValue = 0.33;      // should be in meters/sec, but is motor voltage for now,
+      endTime = time_sec + 3.0; // ~ 0.5 second
+      state = 100;
+    }
+    break;
+
+  case 100: // Maintain last step
+    // stop after end time
+    if (time_sec > endTime)
+    {            // stop, but continue logging for a while (0.3 sec)
+      stop(0.3); // actually sets state to 999 (i.e. default:)
+    }
+    break;
+  default: // Hold until finished
+    // this state is needed to enable a new start
+    if (time_sec > endTime)
+      finished();
+    break;
+  }
+}
 /**
  * Simple 2-step sequence */
 void sequenceTwoSteps()
@@ -368,6 +447,54 @@ void spikeSequence()
   }
 }
 
+void steadyStateSequence()
+{ // this function is called at every sample time
+  // and should never wait in a loop.
+  // Update variables as needed and return.
+  bool button;
+  //
+  // this is a state machine
+  // state 0: wait for start button press
+  // other states are part of a sequence
+  switch (state)
+  {       // run mission, initial value
+  case 0: // State 0 is just inactive, waiting for the start signal.
+    button = digitalReadFast(PIN_START_BUTTON);
+    if (button or robot.missionStart)
+    { // starting by a short time to get zero velocity data to the log
+      // reset for new run
+      start();
+      // Prepare next state
+      desiredValue = 0; // reference value to the controller
+      // to get start the log with no velocity
+      endTime = time_sec + 0.020; // new state to end after 20ms
+      state = 10;
+    }
+    break;
+  case 10: // Waiting for first step (zero velocity to log) to finish.
+    if (time_sec > endTime)
+    {                         // change to next values - drive
+      desiredValue = 6;       // should be in meters/sec, but is motor voltage for now,
+      endTime = time_sec + 0; // ~ 0.5 second
+      state = 11;
+    }
+    break;
+
+  case 100: // Maintain last step
+    // stop after end time
+    if (time_sec > endTime)
+    {            // stop, but continue logging for a while (0.3 sec)
+      stop(0.3); // actually sets state to 999 (i.e. default:)
+    }
+    break;
+  default: // Hold until finished
+    // this state is needed to enable a new start
+    if (time_sec > endTime)
+      finished();
+    break;
+  }
+}
+
 /**
  * make the control */
 void controlUpdate()
@@ -375,14 +502,23 @@ void controlUpdate()
   // called at every tick
   //
   float velRef = desiredValue;
+
+  float voltageLeft = (gear / wheelRadius * velRef + encoder.motorVelocity[0]) * Kp;
+  float voltageRight = (gear / wheelRadius * velRef - encoder.motorVelocity[1]) * Kp;
+
+  const float vMax = 9.0;
+  voltageLeft = constrain(voltageLeft, -vMax, vMax);
+  voltageRight = constrain(voltageRight, -vMax, vMax);
   //
   // For a start, the desiredValue
   // is just used as motor voltage
   //
   // Left motor voltage (-9V to +9V)
-  motor.motorVoltage[0] = -velRef;
+  // Before: motor.motorVoltage[0] = -velRef;
+  motor.motorVoltage[0] = -voltageLeft;
   // Right motor voltage (-9V to +9V)
-  motor.motorVoltage[1] = velRef;
+  // before: motor.motorVoltage[1] = velRef;
+  motor.motorVoltage[1] = voltageRight;
   //
   // in the main loop, there is a motor.tick() that actually send the
   // values to the motor.
@@ -411,6 +547,11 @@ void updateLog()
     logs[logsCnt].poseVel[0] = poseVel[0];
     logs[logsCnt].poseVel[1] = poseVel[1];
     // add more items as needed, NB! also the the struct definition at top.
+    // added by me lec6
+    logs[logsCnt].pose[0] = pose[0];
+    logs[logsCnt].pose[1] = pose[1];
+    logs[logsCnt].pose[2] = pose[2];
+    logs[logsCnt].pose[3] = pose[3];
 
     // ADDED by ME
     logs[logsCnt].gyro[0] = imu2.gyro[0];
@@ -436,6 +577,21 @@ void setup() // INITIALIZATION
   display.useDisplay = true;
 }
 
+void calcul_pose()
+{
+  float motorVel_ms_left = -encoder.motorVelocity[0] * wheelRadius / gear;
+  float motorVel_ms_right = encoder.motorVelocity[1] * wheelRadius / gear;
+
+  poseVel[0] = 0.5 * (motorVel_ms_left + motorVel_ms_right);
+  poseVel[1] = 1 / wheelBase * (-motorVel_ms_left + motorVel_ms_right);
+
+  pose[0] = integrator(poseVel[0], pose[0]);
+  pose[1] = integrator(poseVel[1], pose[1]);
+
+  pose[2] = integrator(cos(pose[1]) * poseVel[0], pose[2]);
+  pose[3] = integrator(sin(pose[1]) * poseVel[0], pose[3]);
+}
+
 /**
  * Main loop
  * */
@@ -451,12 +607,15 @@ void loop(void)
       imu2.tick();
       encoder.tick();
       // updatePose();
-      sequenceTwoSteps();
+      // sequenceTwoSteps();
       // spikeSequence();
+      sequence_1m();
       //
       if (state > 0)
       { // Only if started
         // Calculate new motor voltage
+        // ADD lec6
+        calcul_pose();
         controlUpdate();
       }
       // give value to actuators
