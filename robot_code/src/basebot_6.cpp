@@ -52,8 +52,14 @@ float distA = 0; // trip distance
 float pose[4];
 float poseVel[2];
 bool velSaturated = false;
-float Kp = 0.15;
 
+// added by me
+float Kp = 0.15;
+float Kpt = 5;
+float taui_t = 0.2;
+float previous_poseVel[2];
+float in_integral_prev;
+float out_integral_prev;
 // ////////////////////////////////////////
 // define a structure for log elements
 typedef struct
@@ -76,6 +82,8 @@ typedef struct
   float headU;
   float accVel;
   float accTurn;
+
+  // added by me
 } LogData;
 //
 // allocate memory for data log in memory block 2 available only through malloc/new
@@ -185,9 +193,9 @@ float time_sec = 0;
 // Timer that controls sample time (interrupt based)
 IntervalTimer sampleTimer;
 
-float integrator(float current_in, float prev_integral)
+float integrator(float current_in, float prev_integral, float previous_in)
 {
-  float integral = prev_integral + current_in * sampleTimeUs * 1e-6f;
+  float integral = prev_integral + (current_in + previous_in) * sampleTimeUs * 1e-6f / 2;
   return integral;
 }
 
@@ -206,6 +214,7 @@ int state = 0;          // actual sequence state
 float endTime = 0;      // for current state
 float desiredValue = 0; // desired (reference) value send to controller
 float desiredHeading = 0;
+float desiredTurnrate = 0; // to change afterward to calculate depending on the desiredHeading
 
 void start()
 { // Start timing
@@ -226,6 +235,10 @@ void start()
     pose[i] = 0.0f;
   poseVel[0] = 0.0f;
   poseVel[1] = 0.0f;
+
+  // reset turn rate PI integrator: added lec7
+  in_integral_prev = 0.0f;
+  out_integral_prev = 0.0f;
 }
 
 void stop(float after)
@@ -495,16 +508,45 @@ void steadyStateSequence()
   }
 }
 
+// float integrator(float current_in, float prev_integral, float previous_in)
+
+float control_tr_velLeft()
+{
+
+  float current_turnrate = (encoder.motorVelocity[1] + encoder.motorVelocity[0]) * wheelRadius / (gear * wheelBase);
+  float error = desiredTurnrate - current_turnrate;
+
+  float e_kpt = Kpt * error;
+  float in_integral = e_kpt * (1 / taui_t);
+  float integral = integrator(in_integral, out_integral_prev, in_integral_prev);
+
+  float tr_i = min(integral, 0.25f);
+  if (integral < 0)
+  {
+    tr_i = max(integral, -0.25f);
+  }
+
+  in_integral_prev = in_integral;
+  out_integral_prev = tr_i;
+
+  float tr_u = tr_i + e_kpt;
+  float vel = (wheelBase / 2) * tr_u;
+  return vel;
+}
+
 /**
  * make the control */
 void controlUpdate()
 { // do control during a mission only.
   // called at every tick
   //
-  float velRef = desiredValue;
+  float calculated_value = control_tr_velLeft();
+  float velRef[2];
+  velRef[0] = desiredValue - calculated_value;
+  velRef[1] = desiredValue + calculated_value;
 
-  float voltageLeft = (gear / wheelRadius * velRef + encoder.motorVelocity[0]) * Kp;
-  float voltageRight = (gear / wheelRadius * velRef - encoder.motorVelocity[1]) * Kp;
+  float voltageLeft = (gear / wheelRadius * velRef[0] + encoder.motorVelocity[0]) * Kp;
+  float voltageRight = (gear / wheelRadius * velRef[1] - encoder.motorVelocity[1]) * Kp;
 
   const float vMax = 9.0;
   voltageLeft = constrain(voltageLeft, -vMax, vMax);
@@ -585,12 +627,16 @@ void calcul_pose()
   poseVel[0] = 0.5 * (motorVel_ms_left + motorVel_ms_right);
   poseVel[1] = 1 / wheelBase * (-motorVel_ms_left + motorVel_ms_right);
 
-  pose[0] = integrator(poseVel[0], pose[0]);
-  pose[1] = integrator(poseVel[1], pose[1]);
+  pose[0] = integrator(poseVel[0], pose[0], previous_poseVel[0]);
+  pose[1] = integrator(poseVel[1], pose[1], previous_poseVel[1]);
 
-  pose[2] = integrator(cos(pose[1]) * poseVel[0], pose[2]);
-  pose[3] = integrator(sin(pose[1]) * poseVel[0], pose[3]);
+  pose[2] = integrator(cos(pose[1]) * poseVel[0], pose[2], previous_poseVel[0]);
+  pose[3] = integrator(sin(pose[1]) * poseVel[0], pose[3], previous_poseVel[1]);
+
+  previous_poseVel[0] = poseVel[0];
+  previous_poseVel[1] = poseVel[1];
 }
+// integrator(float current_in, float prev_integral, float previous_in)
 
 /**
  * Main loop
