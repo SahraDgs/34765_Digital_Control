@@ -60,6 +60,11 @@ float taui_t = 0.2;
 float previous_poseVel[2];
 float in_integral_prev;
 float out_integral_prev;
+
+//Previous velocities in the X and Y directions
+// Used by the integrator to calculate the robot's position.
+float previous_xVel = 0.0f;
+float previous_yVel = 0.0f;
 // ////////////////////////////////////////
 // define a structure for log elements
 typedef struct
@@ -84,6 +89,8 @@ typedef struct
   float accTurn;
 
   // added by me
+  float desiredTurnrate;
+  float actualTurnrate;
 } LogData;
 //
 // allocate memory for data log in memory block 2 available only through malloc/new
@@ -129,6 +136,9 @@ void printLog()
   Serial.println("% 19  Pose: heading (rad)");
   Serial.println("% 20  Pose: x (m)");
   Serial.println("% 21  Pose: y (m)");
+  Serial.println("% 22 Desired heading (deg)");
+  Serial.println("% 23 Desired turnrate (rad/s)");
+  Serial.println("% 24 Actual turnrate (rad/s)");
 
   for (int i = 0; i < logsCnt; i++)
   {
@@ -174,6 +184,12 @@ void printLog()
     Serial.print(d->pose[2], 2);
     Serial.print(" ");
     Serial.print(d->pose[3], 2);
+    Serial.print(" ");
+    Serial.print(d->desiredHeading, 4);
+    Serial.print(" ");
+    Serial.print(d->desiredTurnrate, 4);
+    Serial.print(" ");
+    Serial.print(d->actualTurnrate, 4);
     Serial.println(" ");
 
     d++;
@@ -239,6 +255,14 @@ void start()
   // reset turn rate PI integrator: added lec7
   in_integral_prev = 0.0f;
   out_integral_prev = 0.0f;
+
+  // Added lec8: Reset previous velocities before starting a new run.
+  // Otherwise, the integrator could use velocity values from the
+  // previous run and calculate an incorrect initial position.
+  previous_poseVel[0] = 0.0f;
+  previous_poseVel[1] = 0.0f;
+  previous_xVel = 0.0f;
+  previous_yVel = 0.0f;
 }
 
 void stop(float after)
@@ -246,6 +270,11 @@ void stop(float after)
   state = 2;
   desiredValue = 0;
   // end log after an additional short time
+
+  // ADDED lec8: Stop heading corrections
+  desiredHeading = pose[1] * 180.0f / PI;
+  desiredTurnrate = 0;
+
   endTime = time_sec + after;
 }
 
@@ -262,6 +291,122 @@ void finished()
   state = 0;
   printLog();
 }
+
+
+void sequenceSquare()
+{
+  bool button;
+
+  switch (state)
+  {
+  case 0: // Wait for start
+    button = digitalReadFast(PIN_START_BUTTON);
+    if (button or robot.missionStart)
+    {
+      start();
+      desiredValue = 0;
+      desiredHeading = 0;
+      endTime = time_sec + 0.020;
+      state = 10;
+    }
+    break;
+
+  case 10: // Start driving forward 0.75 m
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 101;
+    }
+    break;
+
+  case 101: // Start first 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0;
+      desiredHeading = 90;
+      state = 102;
+    }
+    break;
+
+  case 102: // Start driving forward 0.75 m
+    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 103;
+    }
+    break;
+
+  case 103: // Start second 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0;
+      desiredHeading = 180;
+      state = 104;
+    }
+    break;
+
+  case 104: // Start driving forward 0.75 m
+    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 105;
+    }
+    break;
+
+  case 105: // Start third 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0;
+      desiredHeading = 270;
+      state = 106;
+    }
+    break;
+
+  case 106: // Start driving forward 0.75 m
+    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 107;
+    }
+    break;
+
+  case 107: // Start fourth 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0;
+      desiredHeading = 360;
+      state = 108;
+    }
+    break;
+
+  case 108: // Start driving forward 0.75 m
+    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 109;
+    }
+    break;
+
+  case 109: // Stop after final forward movement
+    if (time_sec > endTime)
+    {
+      stop(0.3);
+    }
+    break;
+
+  default: // Finish sequence
+    if (time_sec > endTime)
+      finished();
+    break;
+  }
+}
+
+
 
 void sequence_1m()
 {
@@ -508,8 +653,8 @@ void steadyStateSequence()
   }
 }
 
-// float integrator(float current_in, float prev_integral, float previous_in)
 
+// float integrator(float current_in, float prev_integral, float previous_in)
 float control_tr_velLeft()
 {
 
@@ -534,13 +679,33 @@ float control_tr_velLeft()
   return vel;
 }
 
+void control_heading()
+{
+  // Calculate heading error (convert desired heading from degrees to radians)
+  float error = desiredHeading * PI / 180.0f - pose[1];
+
+  // Proportional heading controller
+  float Kph = 2.0f;
+  desiredTurnrate = Kph * error;
+
+  // Limit desired turn rate to +/- 1 rad/s
+  desiredTurnrate = constrain(desiredTurnrate, -1.0f, 1.0f);
+}
+
 /**
  * make the control */
 void controlUpdate()
 { // do control during a mission only.
   // called at every tick
   //
+
+  // ADDED lec8: Heading controller
+  // Calculate desired turn rate from heading error
+  control_heading();
+
+  // Turn rate PI controller (lec7)
   float calculated_value = control_tr_velLeft();
+
   float velRef[2];
   velRef[0] = desiredValue - calculated_value;
   velRef[1] = desiredValue + calculated_value;
@@ -564,6 +729,7 @@ void controlUpdate()
   //
   // in the main loop, there is a motor.tick() that actually send the
   // values to the motor.
+
 }
 
 void updateLog()
@@ -600,6 +766,10 @@ void updateLog()
     logs[logsCnt].gyro[1] = imu2.gyro[1];
     logs[logsCnt].gyro[2] = imu2.gyro[2];
 
+    // ADDED lec8: Save desired and actual turn rates
+    logs[logsCnt].desiredTurnrate = desiredTurnrate;
+    logs[logsCnt].actualTurnrate = poseVel[1];
+
     logsCnt++;
   }
 }
@@ -619,23 +789,45 @@ void setup() // INITIALIZATION
   display.useDisplay = true;
 }
 
+
 void calcul_pose()
 {
+  // Convert motor angular velocities (rad/s) to wheel velocities (m/s)
+  // The left motor has a negative sign because it rotates in the opposite direction.
   float motorVel_ms_left = -encoder.motorVelocity[0] * wheelRadius / gear;
   float motorVel_ms_right = encoder.motorVelocity[1] * wheelRadius / gear;
 
+  // Calculate forward velocity (m/s) as the average of both wheel velocities.
   poseVel[0] = 0.5 * (motorVel_ms_left + motorVel_ms_right);
+
+  // Calculate turn rate (rad/s) from the difference between wheel velocities.
   poseVel[1] = 1 / wheelBase * (-motorVel_ms_left + motorVel_ms_right);
 
+  // Integrate forward velocity to calculate travelled distance (m).
   pose[0] = integrator(poseVel[0], pose[0], previous_poseVel[0]);
+
+  // Integrate turn rate to calculate the robot's heading (rad).
   pose[1] = integrator(poseVel[1], pose[1], previous_poseVel[1]);
 
-  pose[2] = integrator(cos(pose[1]) * poseVel[0], pose[2], previous_poseVel[0]);
-  pose[3] = integrator(sin(pose[1]) * poseVel[0], pose[3], previous_poseVel[1]);
+  // Calculate the velocity components along the fixed X and Y axes.
+  // The robot's forward velocity is split into X and Y using its heading.
+  float xVel = cos(pose[1]) * poseVel[0];
+  float yVel = sin(pose[1]) * poseVel[0];
 
+  // Integrate X and Y velocities to calculate the robot's position (m).
+  // The previous X and Y velocities are needed for trapezoidal integration.
+  pose[2] = integrator(xVel, pose[2], previous_xVel);
+  pose[3] = integrator(yVel, pose[3], previous_yVel);
+
+  // Save the current forward velocity and turn rate for the next integration.
   previous_poseVel[0] = poseVel[0];
   previous_poseVel[1] = poseVel[1];
+
+  // Save the current X and Y velocities for the next integration.
+  previous_xVel = xVel;
+  previous_yVel = yVel;
 }
+
 // integrator(float current_in, float prev_integral, float previous_in)
 
 /**
@@ -655,7 +847,7 @@ void loop(void)
       // updatePose();
       // sequenceTwoSteps();
       // spikeSequence();
-      sequence_1m();
+      sequenceSquare();
       //
       if (state > 0)
       { // Only if started
