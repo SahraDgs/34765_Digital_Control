@@ -61,8 +61,17 @@ float previous_poseVel[2];
 float in_integral_prev;
 float out_integral_prev;
 
-//Previous velocities in the X and Y directions
-// Used by the integrator to calculate the robot's position.
+// Lead parameters
+float Kph = 48.891f;
+float tau_lead = 0.0622;
+float alpha_lead = 0.217;
+
+// for the heading lead
+float error_previous;
+float u_lead_previous;
+
+// Previous velocities in the X and Y directions
+//  Used by the integrator to calculate the robot's position.
 float previous_xVel = 0.0f;
 float previous_yVel = 0.0f;
 // ////////////////////////////////////////
@@ -263,6 +272,10 @@ void start()
   previous_poseVel[1] = 0.0f;
   previous_xVel = 0.0f;
   previous_yVel = 0.0f;
+
+  // for the heading lead
+  error_previous = 0;
+  u_lead_previous = 0;
 }
 
 void stop(float after)
@@ -291,7 +304,6 @@ void finished()
   state = 0;
   printLog();
 }
-
 
 void sequenceSquare()
 {
@@ -405,8 +417,6 @@ void sequenceSquare()
     break;
   }
 }
-
-
 
 void sequence_1m()
 {
@@ -653,7 +663,6 @@ void steadyStateSequence()
   }
 }
 
-
 // float integrator(float current_in, float prev_integral, float previous_in)
 float control_tr_velLeft()
 {
@@ -679,17 +688,19 @@ float control_tr_velLeft()
   return vel;
 }
 
-void control_heading()
+float control_heading()
 {
   // Calculate heading error (convert desired heading from degrees to radians)
   float error = desiredHeading * PI / 180.0f - pose[1];
 
   // Proportional heading controller
-  float Kph = 2.0f;
-  desiredTurnrate = Kph * error;
+  float Ts = sampleTimeUs * 1e-6;
+  float u_lead = ((tau_lead * (2 / Ts) + 1) * Kph * error + (-tau_lead * (2 / Ts) + 1) * Kph * error_previous - (1 - alpha_lead * tau_lead * (2 / Ts)) * u_lead_previous) / (1 + alpha_lead * tau_lead * (2 / Ts));
 
-  // Limit desired turn rate to +/- 1 rad/s
-  desiredTurnrate = constrain(desiredTurnrate, -1.0f, 1.0f);
+  error_previous = error;
+  u_lead_previous = u_lead;
+
+  return u_lead;
 }
 
 /**
@@ -701,10 +712,11 @@ void controlUpdate()
 
   // ADDED lec8: Heading controller
   // Calculate desired turn rate from heading error
-  control_heading();
+  float u_lead = control_heading();
+  desiredTurnrate = u_lead;
 
   // Turn rate PI controller (lec7)
-  float calculated_value = control_tr_velLeft();
+  float calculated_value = (wheelBase / 2) * desiredTurnrate;
 
   float velRef[2];
   velRef[0] = desiredValue - calculated_value;
@@ -729,7 +741,6 @@ void controlUpdate()
   //
   // in the main loop, there is a motor.tick() that actually send the
   // values to the motor.
-
 }
 
 void updateLog()
@@ -788,7 +799,6 @@ void setup() // INITIALIZATION
   usb.setup();
   display.useDisplay = true;
 }
-
 
 void calcul_pose()
 {
