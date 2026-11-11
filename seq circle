@@ -1,0 +1,137 @@
+void sequenceCircle()
+{
+  bool button;
+
+  switch (state)
+  {
+  case 0: // Wait for start
+    button = digitalReadFast(PIN_START_BUTTON);
+    if (button or robot.missionStart)
+    {
+      start();
+      desiredValue = 0;
+      desiredHeading = 0;
+      endTime = time_sec + 0.020;
+      state = 10;
+    }
+    break;
+
+  case 10: // Start driving circle
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.45;
+      state = 101;
+    }
+    break;
+
+  case 101: // Follow circle
+    {
+      float radius = 0.5f;
+
+      desiredHeading = pose[0] / radius * 180.0f / PI;
+
+      if (desiredHeading >= 360.0f)
+      {
+        desiredHeading = 360.0f;
+        desiredValue = 0;
+        endTime = time_sec + 0.5;
+        state = 105;
+      }
+    }
+    break;
+
+  case 105: // Stop after final forward movement
+    if (time_sec > endTime)
+    {
+      stop(0.5);
+    }
+    break;
+
+  default: // Finish sequence
+    if (time_sec > endTime)
+      finished();
+    break;
+  }
+}
+
+
+void sequenceSquare()
+{
+  bool button;
+
+  switch (state)
+  {
+  case 0: // Wait for start
+    button = digitalReadFast(PIN_START_BUTTON);
+    if (button or robot.missionStart)
+    {
+      start();
+      desiredValue = 0;
+      desiredHeading = 0;
+      endTime = time_sec + 0.020;
+      state = 10;
+    }
+    break;
+
+  case 10: // Start driving forward 0.75 m
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      endTime = time_sec + 1.0;
+      state = 101;
+    }
+    break;
+
+  case 101: // Start first 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      desiredHeading = 90;
+      endTime = time_sec + 1.0;
+      state = 102;
+    }
+    break;
+
+  case 102: // Start driving forward 0.75 m
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      desiredHeading = 180;
+      endTime = time_sec + 1.0;
+      state = 103;
+    }
+    break;
+
+  case 103: // Start second 90 degree turn
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      desiredHeading = 270;
+      endTime = time_sec + 1.0;
+      state = 104;
+    }
+    break;
+
+  case 104: // Start driving forward 0.75 m
+    if (time_sec > endTime)
+    {
+      desiredValue = 0.75;
+      desiredHeading = 360;
+      endTime = time_sec + 1.0;
+      state = 105;
+    }
+    break;
+
+  case 105: // Stop after final forward movement
+    if (time_sec > endTime)
+    {
+      stop(0.5);
+    }
+    break;
+
+  default: // Finish sequence
+    if (time_sec > endTime)
+      finished();
+    break;
+  }
+}
