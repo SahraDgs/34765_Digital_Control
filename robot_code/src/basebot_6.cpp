@@ -41,12 +41,13 @@ void printLog();
 /**
  * Global variables */
 // Sample time can not go lower than 300us 0.3ms
-const uint32_t sampleTimeUs = 1000; // desired sample time in us !!!! put in 3 hundred ms
+const uint32_t sampleTimeUs = 500; // desired sample time in us !!!! put in 3 hundred ms
 // const float ts = sampleTimeUs * 1e-6; // sample time in seconds
 // Robot configuration
 const float gear = 9.6;
 const float wheelRadius = 0.0315; // (m)
-const float wheelBase = 0.14;
+const float wheelBase = 0.1420;
+// before: const float wheelBase = 0.14;
 // pose values
 float distA = 0; // trip distance
 float pose[4];
@@ -55,8 +56,8 @@ bool velSaturated = false;
 
 // added by me
 float Kp = 0.15;
-float Kpt = 5;
-float taui_t = 0.2;
+float Kpt = 0.2;     // previously 0.5
+float taui_t = 0.02; // previously 0.2
 float previous_poseVel[2];
 float in_integral_prev;
 float out_integral_prev;
@@ -71,12 +72,19 @@ float error_previous;
 float u_lead_previous;
 
 // acceleration limitation
-float acc_vel_lim = 5;
-float acc_turnrate_lim = 7 * (wheelBase / 2);
+float acc_vel_lim = 3;                        // before: 3
+float acc_turnrate_lim = 5 * (wheelBase / 2); // before: 12;
 float acc_lim_vel_prev;
 float acc_vel_prev;
 float acc_lim_turnrate_prev;
 float acc_turnrate_prev;
+
+// for the circle
+bool circle;
+
+// use to limit the fwd speed, to stop at the right moment
+float remaining_dist_fwd;
+float tol = 0.01;
 
 // Previous velocities in the X and Y directions
 //  Used by the integrator to calculate the robot's position.
@@ -252,8 +260,8 @@ void reset();
 int state = 0;          // actual sequence state
 float endTime = 0;      // for current state
 float desiredValue = 0; // desired (reference) value send to controller
-float desiredHeading = 0;
-float desiredTurnrate = 0; // to change afterward to calculate depending on the desiredHeading
+float desiredHeading;
+float desiredTurnrate; // to change afterward to calculate depending on the desiredHeading
 
 void start()
 { // Start timing
@@ -287,6 +295,10 @@ void start()
   previous_xVel = 0.0f;
   previous_yVel = 0.0f;
 
+  // input control
+  desiredHeading = 0;
+  desiredTurnrate = 0;
+
   // for the heading lead
   error_previous = 0;
   u_lead_previous = 0;
@@ -294,12 +306,18 @@ void start()
   // acceleration limiter
   acc_lim_vel_prev = 0;
   acc_lim_turnrate_prev = 0;
+
+  remaining_dist_fwd = 0;
+
+  circle = false;
 }
 
 void stop(float after)
 { // stop, but allow continued logging for a while
   state = 2;
   desiredValue = 0;
+  // added
+  remaining_dist_fwd = 0;
   // end log after an additional short time
 
   // ADDED lec8: Stop heading corrections
@@ -307,6 +325,8 @@ void stop(float after)
   desiredTurnrate = 0;
 
   endTime = time_sec + after;
+
+  circle = false;
 }
 
 void finished()
@@ -323,9 +343,10 @@ void finished()
   printLog();
 }
 
-void sequenceSquare()
+void sequenceFinal()
 {
   bool button;
+  static float circleStart = 0;
 
   switch (state)
   {
@@ -334,67 +355,93 @@ void sequenceSquare()
     if (button or robot.missionStart)
     {
       start();
+      // desiredValue = 0;
+      remaining_dist_fwd = 0;
       desiredValue = 0;
       desiredHeading = 0;
-      endTime = time_sec + 0.020;
+      endTime = time_sec + 0.50;
       state = 10;
+      acc_turnrate_lim = 5 * (wheelBase / 2); // before: 12
+
+      circle = false;
     }
     break;
 
-  case 10: // Start driving forward 0.75 m
-    if (time_sec > endTime)
+  case 10:
+    if (time_sec > endTime) // set param driving forward 1 m
     {
-      desiredValue = 0.75;
-      endTime = time_sec + 1.0;
+
+      remaining_dist_fwd = 1.0f - pose[0];
+      desiredValue = 1.0f;
+      // desiredValue = 0.65;
+      //  endTime = time_sec + 1.5;
       state = 101;
     }
     break;
 
-  case 101: // Start first 90 degree turn
-    if (time_sec > endTime)
+  case 101:
+    remaining_dist_fwd = 1.0f - pose[0]; // driving forward
+    if (tol > fabsf(remaining_dist_fwd)) // set param to turn 72 degrees
     {
-      desiredValue = 0.75;
-      desiredHeading = 90;
+      remaining_dist_fwd = 0;
+      desiredValue = 0.0f;
+      desiredHeading = -72.8;
       endTime = time_sec + 1.0;
       state = 102;
     }
+
     break;
 
-  case 102: // Start driving forward 0.75 m
-    if (time_sec > endTime)
+  case 102:                              // turn to reach -72
+    if (pose[1] <= -72.8f * PI / 180.0f) // set param for the circle
     {
-      desiredValue = 0.75;
-      desiredHeading = 180;
-      endTime = time_sec + 1.0;
+      circleStart = pose[0];
+      desiredValue = 0.45f;
+      // desiredValue = 0.45;
+      remaining_dist_fwd = (2 * PI - 0.3 - (PI / 2 + pose[1])) * 0.5; // calculate the circunference we still need to drive before stopping
       state = 103;
+      circle = true;
     }
     break;
 
-  case 103: // Start second 90 degree turn
-    if (time_sec > endTime)
+  case 103: // Follow circle
+  {
+    acc_turnrate_lim = 7 * (wheelBase / 2); // before: 12
+    float radius = 0.5f;
+    float distance = pose[0] - circleStart;
+
+    desiredHeading = -72.8f + distance / radius * 180.0f / PI;
+    remaining_dist_fwd = (2 * PI - 0.3 - (PI / 2 + pose[1])) * 0.5;
+    if (tol > fabsf(remaining_dist_fwd)) // set the param to turn the 180
     {
-      desiredValue = 0.75;
-      desiredHeading = 270;
-      endTime = time_sec + 1.0;
+      acc_turnrate_lim = 5 * (wheelBase / 2); // before: 12
+      // desiredHeading = .0f;
+      desiredHeading = 180.0f;
+      desiredValue = 0.0f;
+      remaining_dist_fwd = 0.0f;
       state = 104;
+      circle = false;
     }
-    break;
+  }
+  break;
 
-  case 104: // Start driving forward 0.75 m
-    if (time_sec > endTime)
+  case 104:                             // turn to reach 180 degree
+    if (pose[1] <= 180.0 * PI / 180.0f) // set parameters to drive 1.5m
     {
-      desiredValue = 0.75;
-      desiredHeading = 360;
-      endTime = time_sec + 1.0;
+      circleStart = pose[0];
+      desiredValue = 0 * 1.0f;
+      // desiredValue = 0.65;
+      remaining_dist_fwd = 0 * 1.5;
       state = 105;
     }
     break;
 
-  case 105: // Stop after final forward movement
-    if (time_sec > endTime)
+  case 105:                              // drive for 1.5m
+    if (tol > fabsf(remaining_dist_fwd)) // we stop
     {
       stop(0.5);
     }
+    remaining_dist_fwd = circleStart + 1.5 - pose[0];
     break;
 
   default: // Finish sequence
@@ -404,272 +451,24 @@ void sequenceSquare()
   }
 }
 
-void sequence_1m()
-{
-  bool button;
-  //
-  // this is a state machine
-  // state 0: wait for start button press
-  // other states are part of a sequence
-  switch (state)
-  {       // run mission, initial value
-  case 0: // State 0 is just inactive, waiting for the start signal.
-    button = digitalReadFast(PIN_START_BUTTON);
-    if (button or robot.missionStart)
-    { // starting by a short time to get zero velocity data to the log
-      // reset for new run
-      start();
-      // Prepare next state
-      desiredValue = 0; // reference value to the controller
-      // to get start the log with no velocity
-      endTime = time_sec + 0.020; // new state to end after 20ms
-      state = 10;
-    }
-    break;
-  case 10: // Waiting for first step (zero velocity to log) to finish.
-    if (time_sec > endTime)
-    {                           // change to next values - drive
-      desiredValue = 0.33;      // should be in meters/sec, but is motor voltage for now,
-      endTime = time_sec + 3.0; // ~ 0.5 second
-      state = 100;
-    }
-    break;
-
-  case 100: // Maintain last step
-    // stop after end time
-    if (time_sec > endTime)
-    {            // stop, but continue logging for a while (0.3 sec)
-      stop(0.3); // actually sets state to 999 (i.e. default:)
-    }
-    break;
-  default: // Hold until finished
-    // this state is needed to enable a new start
-    if (time_sec > endTime)
-      finished();
-    break;
-  }
-}
-/**
- * Simple 2-step sequence */
-void sequenceTwoSteps()
-{ // this function is called at every sample time
-  // and should never wait in a loop.
-  // Update variables as needed and return.
-  bool button;
-  //
-  // this is a state machine
-  // state 0: wait for start button press
-  // other states are part of a sequence
-  switch (state)
-  {       // run mission, initial value
-  case 0: // State 0 is just inactive, waiting for the start signal.
-    button = digitalReadFast(PIN_START_BUTTON);
-    if (button or robot.missionStart)
-    { // starting by a short time to get zero velocity data to the log
-      // reset for new run
-      start();
-      // Prepare next state
-      desiredValue = 0; // reference value to the controller
-      // to get start the log with no velocity
-      endTime = time_sec + 0.020; // new state to end after 20ms
-      state = 10;
-    }
-    break;
-  case 10: // Waiting for first step (zero velocity to log) to finish.
-    if (time_sec > endTime)
-    {                            // change to next values - drive
-      desiredValue = 1.5;        // should be in meters/sec, but is motor voltage for now,
-      endTime = time_sec + 0.48; // ~ 0.5 second
-      state = 11;
-    }
-    break;
-  case 11: // First step
-    // test if ready for next state
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 3;
-      endTime = time_sec + 0.50;
-      state = 12;
-    }
-    break;
-  case 12: // Second step
-    // test if this state is finished
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 6;
-      endTime = time_sec + 0.5;
-      state = 100;
-    }
-    break;
-  case 100: // Maintain last step
-    // stop after end time
-    if (time_sec > endTime)
-    {            // stop, but continue logging for a while (0.3 sec)
-      stop(0.3); // actually sets state to 999 (i.e. default:)
-    }
-    break;
-  default: // Hold until finished
-    // this state is needed to enable a new start
-    if (time_sec > endTime)
-      finished();
-    break;
-  }
-}
-
-void spikeSequence()
-{ // this function is called at every sample time
-  // and should never wait in a loop.
-  // Update variables as needed and return.
-  bool button;
-  //
-  // this is a state machine
-  // state 0: wait for start button press
-  // other states are part of a sequence
-  switch (state)
-  {       // run mission, initial value
-  case 0: // State 0 is just inactive, waiting for the start signal.
-    button = digitalReadFast(PIN_START_BUTTON);
-    if (button or robot.missionStart)
-    { // starting by a short time to get zero velocity data to the log
-      // reset for new run
-      start();
-      // Prepare next state
-      desiredValue = 0; // reference value to the controller
-      // to get start the log with no velocity
-      endTime = time_sec + 0.020; // new state to end after 20ms
-      state = 10;
-    }
-    break;
-  case 10: // Waiting for first step (zero velocity to log) to finish.
-    if (time_sec > endTime)
-    {                            // change to next values - drive
-      desiredValue = 6;          // should be in meters/sec, but is motor voltage for now,
-      endTime = time_sec + 0.01; // ~ 0.5 second
-      state = 11;
-    }
-    break;
-  case 11: // First step
-    // test if ready for next state
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 0;
-      endTime = time_sec + 0.3;
-      state = 12;
-    }
-    break;
-  case 12: // Second step
-    // test if this state is finished
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 6;
-      endTime = time_sec + 0.01;
-      state = 13;
-    }
-    break;
-
-  case 13: // Second step
-    // test if this state is finished
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 0;
-      endTime = time_sec + 0.3;
-      state = 14;
-    }
-    break;
-
-  case 14: // Second step
-    // test if this state is finished
-    if (time_sec > endTime)
-    { // change to next values
-      desiredValue = 6;
-      endTime = time_sec + 0.01;
-      state = 100;
-    }
-    break;
-  case 100: // Maintain last step
-    // stop after end time
-    if (time_sec > endTime)
-    {            // stop, but continue logging for a while (0.3 sec)
-      stop(0.3); // actually sets state to 999 (i.e. default:)
-    }
-    break;
-  default: // Hold until finished
-    // this state is needed to enable a new start
-    if (time_sec > endTime)
-      finished();
-    break;
-  }
-}
-
-void steadyStateSequence()
-{ // this function is called at every sample time
-  // and should never wait in a loop.
-  // Update variables as needed and return.
-  bool button;
-  //
-  // this is a state machine
-  // state 0: wait for start button press
-  // other states are part of a sequence
-  switch (state)
-  {       // run mission, initial value
-  case 0: // State 0 is just inactive, waiting for the start signal.
-    button = digitalReadFast(PIN_START_BUTTON);
-    if (button or robot.missionStart)
-    { // starting by a short time to get zero velocity data to the log
-      // reset for new run
-      start();
-      // Prepare next state
-      desiredValue = 0; // reference value to the controller
-      // to get start the log with no velocity
-      endTime = time_sec + 0.020; // new state to end after 20ms
-      state = 10;
-    }
-    break;
-  case 10: // Waiting for first step (zero velocity to log) to finish.
-    if (time_sec > endTime)
-    {                         // change to next values - drive
-      desiredValue = 6;       // should be in meters/sec, but is motor voltage for now,
-      endTime = time_sec + 0; // ~ 0.5 second
-      state = 11;
-    }
-    break;
-
-  case 100: // Maintain last step
-    // stop after end time
-    if (time_sec > endTime)
-    {            // stop, but continue logging for a while (0.3 sec)
-      stop(0.3); // actually sets state to 999 (i.e. default:)
-    }
-    break;
-  default: // Hold until finished
-    // this state is needed to enable a new start
-    if (time_sec > endTime)
-      finished();
-    break;
-  }
-}
-
 // float integrator(float current_in, float prev_integral, float previous_in)
-float control_tr_velLeft()
+float control_tr_velLeft(float delta_vel_tr_limited)
 {
 
   float current_turnrate = (encoder.motorVelocity[1] + encoder.motorVelocity[0]) * wheelRadius / (gear * wheelBase);
-  float error = desiredTurnrate - current_turnrate;
+  float desiredTurnrateInput = delta_vel_tr_limited / (wheelBase / 2);
+  float error = desiredTurnrateInput - current_turnrate;
 
   float e_kpt = Kpt * error;
   float in_integral = e_kpt * (1 / taui_t);
   float integral = integrator(in_integral, out_integral_prev, in_integral_prev);
 
-  float tr_i = min(integral, 0.25f);
-  if (integral < 0)
-  {
-    tr_i = max(integral, -0.25f);
-  }
+  float tr_i = constrain(integral, -1, 1);
 
   in_integral_prev = in_integral;
   out_integral_prev = tr_i;
 
-  float tr_u = tr_i + e_kpt;
+  float tr_u = desiredTurnrateInput + tr_i + e_kpt;
   float vel = (wheelBase / 2) * tr_u;
   return vel;
 }
@@ -725,26 +524,28 @@ void controlUpdate()
   // ADDED lec8: Heading controller
   // Calculate desired turn rate from heading error
   float u_lead = control_heading();
-
-
-  //New code to test
   float error = desiredHeading * PI / 180.0f - pose[1];
-  float acc_turnrate_lim_rad = 0.8*acc_turnrate_lim /(wheelBase / 2);   //  0.9 to avoid being exactly on the limit
-  float turnate_lim_stopTime = sqrtf(2 *  acc_turnrate_lim_rad * fabsf(error));    //limit on the turnrate to be sure that we stop on time at the targeted heading
-  desiredTurnrate = constrain(u_lead, - turnate_lim_stopTime, turnate_lim_stopTime );
+  float acc_turnrate_lim_rad = 0.8 * acc_turnrate_lim / (wheelBase / 2);       //  0.9 to avoid being exactly on the limit
+  float turnate_lim_stopTime = sqrtf(2 * acc_turnrate_lim_rad * fabsf(error)); // limit on the turnrate to be sure that we stop on time at the targeted heading
+  desiredTurnrate = constrain(u_lead, -turnate_lim_stopTime, turnate_lim_stopTime);
 
+  if (circle)
+    desiredTurnrate += poseVel[0] / 0.5; // v/R on the circle, the controller corrects the rest
 
   // Turn rate PI controller (lec7)
   float delta_wheel_vel = (wheelBase / 2) * desiredTurnrate;
-  float desired_delta_vel_tr = acceleration_limiter_turnrate(delta_wheel_vel, acc_turnrate_lim);  //in m/s
+  float delta_vel_tr_limited = acceleration_limiter_turnrate(delta_wheel_vel, acc_turnrate_lim); // in m/s
+  float desired_delta_vel_tr = control_tr_velLeft(delta_vel_tr_limited);
 
   float velRef[2];
 
-  float desired_base_vel = acceleration_limiter_vel(desiredValue, acc_vel_lim);   //in m/s
+  float speed_v_lim_stopTime = sqrtf(2 * 0.8 * acc_vel_lim * fabsf(remaining_dist_fwd)); // limit on the turnrate to be sure that we stop on time at the targeted heading
+  float desiredvalue_v = constrain(desiredValue, -speed_v_lim_stopTime, speed_v_lim_stopTime);
+  float desired_base_vel = acceleration_limiter_vel(desiredvalue_v, acc_vel_lim); // in m/s
   velRef[0] = desired_base_vel - desired_delta_vel_tr;
   velRef[1] = desired_base_vel + desired_delta_vel_tr;
 
-  float voltageLeft = (gear / wheelRadius * velRef[0] + encoder.motorVelocity[0]) * Kp;  //in rad/s
+  float voltageLeft = (gear / wheelRadius * velRef[0] + encoder.motorVelocity[0]) * Kp; // in rad/s
   float voltageRight = (gear / wheelRadius * velRef[1] - encoder.motorVelocity[1]) * Kp;
 
   const float vMax = 9.0;
@@ -768,7 +569,7 @@ void controlUpdate()
 void updateLog()
 {                         // step response mode
   static int logTick = 0; // added because too much log
-  if (state > 0 and logsCnt < logsMax and (logTick++ % 3) == 0)
+  if (state > 0 and logsCnt < logsMax and (logTick++ % 10) == 0)
   { // save data for this sample into dataLog structure
     logs[logsCnt].time = time_sec;
     logs[logsCnt].state = state;
@@ -882,9 +683,8 @@ void loop(void)
       imu2.tick();
       encoder.tick();
       // updatePose();
-      // sequenceTwoSteps();
-      // spikeSequence();
-      sequenceSquare();
+      sequenceFinal();
+      // sequence_1m();
       //
       if (state > 0)
       { // Only if started
