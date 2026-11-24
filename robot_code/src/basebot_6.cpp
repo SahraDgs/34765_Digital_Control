@@ -70,6 +70,14 @@ float alpha_lead = 0.217;
 float error_previous;
 float u_lead_previous;
 
+// acceleration limitation
+float acc_vel_lim = 5;
+float acc_turnrate_lim = 7 * (wheelBase / 2);
+float acc_lim_vel_prev;
+float acc_vel_prev;
+float acc_lim_turnrate_prev;
+float acc_turnrate_prev;
+
 // Previous velocities in the X and Y directions
 //  Used by the integrator to calculate the robot's position.
 float previous_xVel = 0.0f;
@@ -148,6 +156,8 @@ void printLog()
   Serial.println("% 22 Desired heading (deg)");
   Serial.println("% 23 Desired turnrate (rad/s)");
   Serial.println("% 24 Actual turnrate (rad/s)");
+  Serial.println("% 25 acceleration velocity (m/s)");
+  Serial.println("% 26 acceleration turnrate (rad/s)");
 
   for (int i = 0; i < logsCnt; i++)
   {
@@ -199,6 +209,10 @@ void printLog()
     Serial.print(d->desiredTurnrate, 4);
     Serial.print(" ");
     Serial.print(d->actualTurnrate, 4);
+    Serial.print(" ");
+    Serial.print(d->accVel, 4);
+    Serial.print(" ");
+    Serial.print(d->accTurn, 4);
     Serial.println(" ");
 
     d++;
@@ -276,6 +290,10 @@ void start()
   // for the heading lead
   error_previous = 0;
   u_lead_previous = 0;
+
+  // acceleration limiter
+  acc_lim_vel_prev = 0;
+  acc_lim_turnrate_prev = 0;
 }
 
 void stop(float after)
@@ -335,16 +353,18 @@ void sequenceSquare()
   case 101: // Start first 90 degree turn
     if (time_sec > endTime)
     {
-      desiredValue = 0;
+      desiredValue = 0.75;
       desiredHeading = 90;
+      endTime = time_sec + 1.0;
       state = 102;
     }
     break;
 
   case 102: // Start driving forward 0.75 m
-    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    if (time_sec > endTime)
     {
       desiredValue = 0.75;
+      desiredHeading = 180;
       endTime = time_sec + 1.0;
       state = 103;
     }
@@ -353,61 +373,27 @@ void sequenceSquare()
   case 103: // Start second 90 degree turn
     if (time_sec > endTime)
     {
-      desiredValue = 0;
-      desiredHeading = 180;
+      desiredValue = 0.75;
+      desiredHeading = 270;
+      endTime = time_sec + 1.0;
       state = 104;
     }
     break;
 
   case 104: // Start driving forward 0.75 m
-    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
+    if (time_sec > endTime)
     {
       desiredValue = 0.75;
+      desiredHeading = 360;
       endTime = time_sec + 1.0;
       state = 105;
     }
     break;
 
-  case 105: // Start third 90 degree turn
+  case 105: // Stop after final forward movement
     if (time_sec > endTime)
     {
-      desiredValue = 0;
-      desiredHeading = 270;
-      state = 106;
-    }
-    break;
-
-  case 106: // Start driving forward 0.75 m
-    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
-    {
-      desiredValue = 0.75;
-      endTime = time_sec + 1.0;
-      state = 107;
-    }
-    break;
-
-  case 107: // Start fourth 90 degree turn
-    if (time_sec > endTime)
-    {
-      desiredValue = 0;
-      desiredHeading = 360;
-      state = 108;
-    }
-    break;
-
-  case 108: // Start driving forward 0.75 m
-    if (abs(desiredHeading * PI / 180.0f - pose[1]) < 0.05f)
-    {
-      desiredValue = 0.75;
-      endTime = time_sec + 1.0;
-      state = 109;
-    }
-    break;
-
-  case 109: // Stop after final forward movement
-    if (time_sec > endTime)
-    {
-      stop(0.3);
+      stop(0.5);
     }
     break;
 
@@ -703,6 +689,32 @@ float control_heading()
   return u_lead;
 }
 
+double acceleration_limiter_vel(double ref, double acc_lim)
+{
+  float Kp_vel_acc = 25;
+
+  float acc = constrain(Kp_vel_acc * (ref - acc_lim_vel_prev), -acc_lim, acc_lim);
+  float acc_lim_vel = integrator(acc, acc_lim_vel_prev, acc);
+
+  acc_vel_prev = acc;
+  acc_lim_vel_prev = acc_lim_vel;
+
+  return acc_lim_vel;
+}
+
+double acceleration_limiter_turnrate(double ref, double acc_lim)
+{
+  float Kp_vel_acc = 25;
+
+  float acc = constrain(Kp_vel_acc * (ref - acc_lim_turnrate_prev), -acc_lim, acc_lim);
+  float acc_lim_turnrate = integrator(acc, acc_lim_turnrate_prev, acc);
+
+  acc_turnrate_prev = acc;
+  acc_lim_turnrate_prev = acc_lim_turnrate;
+
+  return acc_lim_turnrate;
+}
+
 /**
  * make the control */
 void controlUpdate()
@@ -713,16 +725,26 @@ void controlUpdate()
   // ADDED lec8: Heading controller
   // Calculate desired turn rate from heading error
   float u_lead = control_heading();
-  desiredTurnrate = u_lead;
+
+
+  //New code to test
+  float error = desiredHeading * PI / 180.0f - pose[1];
+  float acc_turnrate_lim_rad = 0.8*acc_turnrate_lim /(wheelBase / 2);   //  0.9 to avoid being exactly on the limit
+  float turnate_lim_stopTime = sqrtf(2 *  acc_turnrate_lim_rad * fabsf(error));    //limit on the turnrate to be sure that we stop on time at the targeted heading
+  desiredTurnrate = constrain(u_lead, - turnate_lim_stopTime, turnate_lim_stopTime );
+
 
   // Turn rate PI controller (lec7)
-  float calculated_value = (wheelBase / 2) * desiredTurnrate;
+  float delta_wheel_vel = (wheelBase / 2) * desiredTurnrate;
+  float desired_delta_vel_tr = acceleration_limiter_turnrate(delta_wheel_vel, acc_turnrate_lim);  //in m/s
 
   float velRef[2];
-  velRef[0] = desiredValue - calculated_value;
-  velRef[1] = desiredValue + calculated_value;
 
-  float voltageLeft = (gear / wheelRadius * velRef[0] + encoder.motorVelocity[0]) * Kp;
+  float desired_base_vel = acceleration_limiter_vel(desiredValue, acc_vel_lim);   //in m/s
+  velRef[0] = desired_base_vel - desired_delta_vel_tr;
+  velRef[1] = desired_base_vel + desired_delta_vel_tr;
+
+  float voltageLeft = (gear / wheelRadius * velRef[0] + encoder.motorVelocity[0]) * Kp;  //in rad/s
   float voltageRight = (gear / wheelRadius * velRef[1] - encoder.motorVelocity[1]) * Kp;
 
   const float vMax = 9.0;
@@ -744,8 +766,9 @@ void controlUpdate()
 }
 
 void updateLog()
-{ // step response mode
-  if (state > 0 and logsCnt < logsMax)
+{                         // step response mode
+  static int logTick = 0; // added because too much log
+  if (state > 0 and logsCnt < logsMax and (logTick++ % 3) == 0)
   { // save data for this sample into dataLog structure
     logs[logsCnt].time = time_sec;
     logs[logsCnt].state = state;
@@ -780,6 +803,10 @@ void updateLog()
     // ADDED lec8: Save desired and actual turn rates
     logs[logsCnt].desiredTurnrate = desiredTurnrate;
     logs[logsCnt].actualTurnrate = poseVel[1];
+
+    // ADDED lec9
+    logs[logsCnt].accVel = acc_lim_vel_prev;                         // m/s
+    logs[logsCnt].accTurn = acc_lim_turnrate_prev / (wheelBase / 2); // rad/s
 
     logsCnt++;
   }

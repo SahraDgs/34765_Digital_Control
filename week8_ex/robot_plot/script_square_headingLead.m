@@ -1,12 +1,13 @@
 clear
+close all;
 format compact
 gear = 9.6;
 wrad = 0.0315;
 % Charge data from the log that correspond to an straighteasing sequence of the
 % voltage
-dd_straight = load('data_square_accLimit_final_version.log');
+dd_straight = load('data_exam_traj.log');
 
-N_straight = 1826 ;          % samples per run
+N_straight = 2171 ;          % samples per run
 run_straight = 1;
 d_straight = dd_straight((run_straight-1)*N_straight + (1:N_straight), :);
 
@@ -14,17 +15,55 @@ t_straight = d_straight(:,1);
 driv_vel = d_straight(:,16);
 turn_rate = d_straight(:,17);
 
-heading = d_straight(:, 19);
+heading = d_straight(:, 19)*180/pi;
 x = d_straight(:, 20);
-y = d_straight(:, 21);  
+y = d_straight(:, 21);
+
+distance = d_straight(:, 18);
 
 %to check the slip
 w_enc = d_straight(:, 24);   %turn rate from the encoder (what we want)
 gyro_z = d_straight(:, 13);  %actual turn rate (what we actually get)
 
-
-
+gyro_z = gyro_z - mean(gyro_z(1:4));
 vel_right = d_straight(:, 9) * wrad/gear;
+
+head_gyro = cumtrapz(t_straight, gyro_z);              % real heading (deg)
+x_g = cumtrapz(t_straight, driv_vel .* cosd(head_gyro)); % path using gyro heading
+y_g = cumtrapz(t_straight, driv_vel .* sind(head_gyro));
+
+figure('Position', [100 100 1200 450], 'Theme', 'light');   
+plot(x_g, y_g, 'LineWidth', 1.5)
+
+grid on
+legend('trajectory')
+xlabel('x_gyro')
+ylabel('y_gyro')
+xlim([-0.5 2.5])
+ylim([-0.5 2.5])
+axis square
+
+
+figure('Position', [100 100 1200 450], 'Theme', 'light');   
+plot(t_straight, head_gyro, 'LineWidth', 1.5)
+
+grid on
+legend('trajectory')
+xlabel('time')
+
+
+figure('Position', [100 100 1200 450], 'Theme', 'light');   
+plot(t_straight, distance, 'LineWidth', 1.5)
+
+grid on
+legend('distance (m)')
+xlabel('time')
+
+
+
+
+
+%% Plots from before
 
 % PLot
 
@@ -36,44 +75,50 @@ plot(t_straight, turn_rate)
 grid on
 legend('Driving Velocity', 'turn rate (rad/s)')
 xlabel('Time (sec)')
-exportgraphics(gcf, 'plot_pos_vel.png', 'Resolution', 300);
+
+
+
+figure('Position', [100 100 1200 450], 'Theme', 'light');   
+
+plot(t_straight, x, 'LineWidth', 1.5)
+hold on
+plot(t_straight, y, 'LineWidth', 1.5)
+plot(t_straight, vel_right, 'LineWidth', 1.5)
+
+grid on
+legend('x (m)', 'y (m)', 'velocity right (m/s)')
+xlabel('Time (sec)')
 
 
 
 figure('Position', [100 100 1200 450], 'Theme', 'light');   
 
 plot(t_straight, heading, 'LineWidth', 1.5)
-hold on
-plot(t_straight, x, 'LineWidth', 1.5)
-plot(t_straight, y, 'LineWidth', 1.5)
-plot(t_straight, vel_right, 'LineWidth', 1.5)
 
 grid on
-legend('heading (rad)', 'x (m)', 'y (m)', 'velocity right (m/s)')
+legend('heading (rad)')
 xlabel('Time (sec)')
-exportgraphics(gcf, 'plot_pos.png', 'Resolution', 300);
-
 
 %pot to check the slip
 figure('Position', [100 100 1200 450], 'Theme', 'light');   
 
-plot(t_straight, gyro_z* pi/180, 'LineWidth', 1.5)
+
+
+plot(t_straight, w_enc * 180/pi, 'LineWidth', 1.5)
 hold on
-plot(t_straight, w_enc, 'LineWidth', 1.5)
+plot(t_straight, gyro_z, 'LineWidth', 1.5)
 
 grid on
-legend('actual turnrate (rad/s)', 'encoder turnrate (rad/s)')
+legend('encoder turnrate (degree/s)', 'actual turnrate (degree/s)')
 xlabel('Time (sec)')
-exportgraphics(gcf, 'plot_slip.png', 'Resolution', 300);
-
-%pot to check the slip
-figure('Position', [100 100 1200 450], 'Theme', 'light');   
-
-plot(t_straight, (gyro_z* pi/180) - w_enc, 'LineWidth', 1.5)
-
-grid on
-legend('difference turnrate (rad/s)')
-xlabel('Time (sec)')
-exportgraphics(gcf, 'plot_slip_diff.png', 'Resolution', 300);
 
 
+
+gyro_z = d_straight(:,13);
+gyro_z = gyro_z - mean(gyro_z(1:90));       % remove offset (robot still for the first 0.5 s)
+head_gyro = cumtrapz(t_straight, gyro_z);   % gyro heading (deg)
+state = d_straight(:,2);
+
+i = find(state == 103);                     % samples on the circle
+ratio = (heading(i(end)) - heading(i(1))) / (head_gyro(i(end)) - head_gyro(i(1)));
+fprintf('wheelBase should be about %.4f m\n', 0.14 * ratio);
